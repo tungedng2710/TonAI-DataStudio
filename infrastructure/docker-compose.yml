@@ -1,0 +1,171 @@
+name: cognidoc-data-studio
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-data_studio}
+      POSTGRES_USER: ${POSTGRES_USER:-data_studio}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local-development-only}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:8-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    volumes:
+      - redis_data:/data
+
+  rustfs-permissions:
+    image: alpine:3.22
+    user: root
+    command: ["chown", "10001:10001", "/rustfs"]
+    volumes:
+      - "${RUSTFS_DATA_PATH:-rustfs_data}:/rustfs"
+
+  upload-permissions:
+    image: alpine:3.22
+    user: root
+    command: ["chown", "-R", "10001:10001", "/uploads"]
+    volumes:
+      - "${UPLOAD_STAGING_PATH:-upload_staging}:/uploads"
+
+  versioning-permissions:
+    image: alpine:3.22
+    user: root
+    command: ["chown", "-R", "10001:10001", "/versioning"]
+    volumes:
+      - "${VERSIONING_DATA_PATH:-versioning_data}:/versioning"
+
+  rustfs:
+    image: rustfs/rustfs:latest
+    depends_on:
+      rustfs-permissions:
+        condition: service_completed_successfully
+    environment:
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-rustfsadmin}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-local-development-only}
+      RUSTFS_CONSOLE_ENABLE: "true"
+    command: ["--console-enable", "/data"]
+    ports:
+      - "${RUSTFS_API_PORT:-9000}:9000"
+      - "${RUSTFS_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - "${RUSTFS_DATA_PATH:-rustfs_data}:/data"
+
+  api:
+    image: cognidoc-data-studio-api
+    build:
+      context: ..
+      dockerfile: apps/api/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rustfs:
+        condition: service_started
+      upload-permissions:
+        condition: service_completed_successfully
+      versioning-permissions:
+        condition: service_completed_successfully
+    user: "10001:10001"
+    environment:
+      DATA_STUDIO_ENVIRONMENT: development
+      DATA_STUDIO_AUTO_CREATE_TABLES: "false"
+      DATA_STUDIO_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-data_studio}:${POSTGRES_PASSWORD:-local-development-only}@postgres:5432/${POSTGRES_DB:-data_studio}
+      DATA_STUDIO_STORAGE_BACKEND: s3
+      DATA_STUDIO_S3_ENDPOINT_URL: http://rustfs:9000
+      DATA_STUDIO_S3_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-rustfsadmin}
+      DATA_STUDIO_S3_SECRET_KEY: ${RUSTFS_SECRET_KEY:-local-development-only}
+      DATA_STUDIO_S3_BUCKET: datasets
+      DATA_STUDIO_REDIS_URL: redis://redis:6379/0
+      DATA_STUDIO_STAGING_ROOT: /var/lib/data-studio/uploads
+      DATA_STUDIO_VERSIONING_ROOT: /var/lib/data-studio/versioning
+      TMPDIR: /var/lib/data-studio/uploads
+      USER: data-studio
+      LOGNAME: data-studio
+      DATA_STUDIO_MAX_UPLOAD_BYTES: ${DATA_STUDIO_MAX_UPLOAD_BYTES:-2147483648}
+      DATA_STUDIO_MAX_FILE_BYTES: ${DATA_STUDIO_MAX_FILE_BYTES:-536870912}
+      DATA_STUDIO_MAX_FILE_COUNT: ${DATA_STUDIO_MAX_FILE_COUNT:-10000}
+      DATA_STUDIO_AUTH_SECRET_KEY: ${AUTH_SECRET_KEY:-development-only-change-me}
+      DATA_STUDIO_AUTH_COOKIE_SECURE: ${DATA_STUDIO_AUTH_COOKIE_SECURE:-false}
+      DATA_STUDIO_CORS_ORIGINS: http://localhost:3000,http://localhost:5173
+    ports:
+      - "${API_PORT:-8001}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    volumes:
+      - "${UPLOAD_STAGING_PATH:-upload_staging}:/var/lib/data-studio/uploads"
+      - "${VERSIONING_DATA_PATH:-versioning_data}:/var/lib/data-studio/versioning"
+    restart: unless-stopped
+
+  worker:
+    image: cognidoc-data-studio-api
+    command: ["celery", "-A", "data_studio_api.worker:celery_app", "worker", "--loglevel=INFO", "--concurrency=2"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rustfs:
+        condition: service_started
+      upload-permissions:
+        condition: service_completed_successfully
+      versioning-permissions:
+        condition: service_completed_successfully
+    user: "10001:10001"
+    environment:
+      DATA_STUDIO_ENVIRONMENT: development
+      DATA_STUDIO_AUTO_CREATE_TABLES: "false"
+      DATA_STUDIO_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-data_studio}:${POSTGRES_PASSWORD:-local-development-only}@postgres:5432/${POSTGRES_DB:-data_studio}
+      DATA_STUDIO_STORAGE_BACKEND: s3
+      DATA_STUDIO_S3_ENDPOINT_URL: http://rustfs:9000
+      DATA_STUDIO_S3_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-rustfsadmin}
+      DATA_STUDIO_S3_SECRET_KEY: ${RUSTFS_SECRET_KEY:-local-development-only}
+      DATA_STUDIO_REDIS_URL: redis://redis:6379/0
+      DATA_STUDIO_STAGING_ROOT: /var/lib/data-studio/uploads
+      DATA_STUDIO_VERSIONING_ROOT: /var/lib/data-studio/versioning
+      TMPDIR: /var/lib/data-studio/uploads
+      USER: data-studio
+      LOGNAME: data-studio
+      DATA_STUDIO_MAX_UPLOAD_BYTES: ${DATA_STUDIO_MAX_UPLOAD_BYTES:-2147483648}
+      DATA_STUDIO_MAX_FILE_BYTES: ${DATA_STUDIO_MAX_FILE_BYTES:-536870912}
+      DATA_STUDIO_MAX_FILE_COUNT: ${DATA_STUDIO_MAX_FILE_COUNT:-10000}
+      DATA_STUDIO_AUTH_SECRET_KEY: ${AUTH_SECRET_KEY:-development-only-change-me}
+    volumes:
+      - "${UPLOAD_STAGING_PATH:-upload_staging}:/var/lib/data-studio/uploads"
+      - "${VERSIONING_DATA_PATH:-versioning_data}:/var/lib/data-studio/versioning"
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ..
+      dockerfile: apps/web/Dockerfile
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+  rustfs_data:
+  upload_staging:
+  versioning_data:

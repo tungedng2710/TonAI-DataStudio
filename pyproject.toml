@@ -1,0 +1,64 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cognidoc-data-studio"
+version = "0.1.0"
+description = "A self-hosted, Hugging Face-compatible dataset studio"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "alembic>=1.14,<2",
+  "bleach>=6.2,<7",
+  "boto3>=1.35,<2",
+  "celery[redis]>=5.5,<6",
+    "duckdb>=1.2,<2",
+    "dvc-s3>=3.2,<4",
+    "fastapi>=0.115,<1",
+  "markdown>=3.7,<4",
+  "pillow>=11,<13",
+  "polars>=1.20,<2",
+  "psycopg[binary]>=3.2,<4",
+  "pyarrow>=19,<22",
+  "pydantic-settings>=2.7,<3",
+  "python-multipart>=0.0.20,<1",
+  "pyyaml>=6.0,<7",
+  "sqlalchemy>=2.0,<3",
+  "uvicorn[standard]>=0.34,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "httpx>=0.28,<1",
+  "mypy>=1.14,<2",
+  "pytest>=8.3,<9",
+  "pytest-cov>=6,<7",
+  "ruff>=0.9,<1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["apps/api/data_studio_api"]
+
+[tool.pytest.ini_options]
+addopts = "-q --strict-markers"
+testpaths = ["tests"]
+pythonpath = ["apps/api"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+packages = ["data_studio_api"]
+mypy_path = "apps/api"
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["bleach.*", "boto3.*", "botocore.*", "celery.*", "markdown.*", "pyarrow.*", "yaml.*"]
+ignore_missing_imports = true
