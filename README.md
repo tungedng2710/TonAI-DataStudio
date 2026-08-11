@@ -9,6 +9,8 @@ and revision history.
 This repository currently implements the first runnable vertical slice from `AGENT.md`. Its
 compatibility claims are intentionally narrower than the complete MVP; see [Current limits](#current-limits).
 
+![TonAI Data Studio demo](assets/demo_datahub.png)
+
 ## What works
 
 - Dataset repository creation under a namespace, with private/internal/public visibility metadata
