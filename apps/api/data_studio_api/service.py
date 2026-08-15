@@ -407,11 +407,8 @@ class DatasetService:
         if column not in columns:
             raise ValidationError("invalid_image_column", f"Unknown image column: {column}")
         paths = list(split.data_files)
-        if not paths or any(Path(path).suffix.lower() != ".parquet" for path in paths):
-            raise ValidationError(
-                "unsupported_image_source",
-                "Embedded image previews require Parquet source files.",
-            )
+        if row_index < 0:
+            raise NotFoundError(f"Viewer row {row_index}")
 
         column_key = hashlib.sha256(column.encode()).hexdigest()[:16]
         cache_key = (
@@ -421,35 +418,68 @@ class DatasetService:
         if thumbnail and self.storage.has_object(cache_key):
             return b"".join(self.storage.iter_object(cache_key)), "image/webp", None
 
-        records = self.db.scalars(
-            select(RepositoryFile).where(
-                RepositoryFile.revision_id == revision.id,
-                RepositoryFile.path.in_(paths),
+        if split.config.builder_name == "imagefolder":
+            page = self.viewer_page(
+                revision,
+                split,
+                raw_filter=None,
+                offset=row_index,
+                limit=1,
             )
-        ).all()
-        records_by_path = {record.path: record for record in records}
-        missing = [path for path in paths if path not in records_by_path]
-        if missing:
-            raise NotFoundError(f"Viewer source file {missing[0]}")
+            if not page.rows:
+                raise NotFoundError(f"Viewer row {row_index}")
+            cell = page.rows[0].get(column)
+            image_path = cell.get("path") if isinstance(cell, dict) else None
+            if not isinstance(image_path, str):
+                raise ValidationError(
+                    "invalid_image_cell",
+                    f"Column {column!r} does not contain an image path.",
+                )
+            record = self.db.scalar(
+                select(RepositoryFile).where(
+                    RepositoryFile.revision_id == revision.id,
+                    RepositoryFile.path == image_path,
+                )
+            )
+            if record is None:
+                raise NotFoundError(f"Viewer image {image_path}")
+            content = b"".join(self.storage.iter_object(record.storage_object_key))
+            filename = image_path
+        else:
+            if not paths or any(Path(path).suffix.lower() != ".parquet" for path in paths):
+                raise ValidationError(
+                    "unsupported_image_source",
+                    "Embedded image previews require Parquet source files.",
+                )
+            records = self.db.scalars(
+                select(RepositoryFile).where(
+                    RepositoryFile.revision_id == revision.id,
+                    RepositoryFile.path.in_(paths),
+                )
+            ).all()
+            records_by_path = {record.path: record for record in records}
+            missing = [path for path in paths if path not in records_by_path]
+            if missing:
+                raise NotFoundError(f"Viewer source file {missing[0]}")
 
-        with ExitStack() as stack:
-            sources = [
-                (
-                    path,
-                    stack.enter_context(
-                        self.storage.open_object(records_by_path[path].storage_object_key)
-                    ),
-                )
-                for path in paths
-            ]
-            try:
-                content, filename = parquet_image_cell(
-                    sources,
-                    row_index,
-                    column,
-                )
-            except IndexError as exc:
-                raise NotFoundError(f"Viewer row {row_index}") from exc
+            with ExitStack() as stack:
+                sources = [
+                    (
+                        path,
+                        stack.enter_context(
+                            self.storage.open_object(records_by_path[path].storage_object_key)
+                        ),
+                    )
+                    for path in paths
+                ]
+                try:
+                    content, filename = parquet_image_cell(
+                        sources,
+                        row_index,
+                        column,
+                    )
+                except IndexError as exc:
+                    raise NotFoundError(f"Viewer row {row_index}") from exc
         if len(content) > self.settings.viewer_image_max_bytes:
             raise ValidationError(
                 "image_too_large",

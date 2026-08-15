@@ -54,6 +54,40 @@ def test_imagefolder_infers_layout() -> None:
     assert configs[0].splits[0].name == "train"
 
 
+def test_metadata_imagefolder_infers_conventional_splits() -> None:
+    configs = detect_layout(
+        [
+            "train/metadata.jsonl",
+            "train/images/1.jpg",
+            "validation/metadata.jsonl",
+            "validation/images/2.png",
+            "test/metadata.jsonl",
+            "test/images/3.webp",
+        ],
+        {},
+    )
+
+    assert configs[0].builder_name == "imagefolder"
+    assert {split.name: split.files for split in configs[0].splits} == {
+        "test": ["test/images/3.webp", "test/metadata.jsonl"],
+        "train": ["train/images/1.jpg", "train/metadata.jsonl"],
+        "validation": ["validation/images/2.png", "validation/metadata.jsonl"],
+    }
+
+
+def test_explicit_metadata_imagefolder_uses_imagefolder_builder() -> None:
+    configs = detect_layout(
+        ["train/metadata.jsonl", "train/images/1.jpg"],
+        {
+            "data_files": {
+                "train": ["train/metadata.jsonl", "train/images/*.jpg"],
+            }
+        },
+    )
+
+    assert configs[0].builder_name == "imagefolder"
+
+
 def test_tabular_shards_take_precedence_over_raw_media() -> None:
     configs = detect_layout(
         [

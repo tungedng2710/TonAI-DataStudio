@@ -98,6 +98,11 @@ def _explicit_splits(data_files: Any, available: set[str], context: str) -> list
 
 def _builder_for(files: list[str]) -> str:
     suffixes = {PurePosixPath(path).suffix.lower() for path in files}
+    has_image_metadata = any(
+        PurePosixPath(path).name.lower() in METADATA_NAMES for path in files
+    )
+    if has_image_metadata and any(suffix in IMAGE_SUFFIXES for suffix in suffixes):
+        return "imagefolder"
     if suffixes and suffixes <= IMAGE_SUFFIXES:
         return "imagefolder"
     if ".parquet" in suffixes:
@@ -178,7 +183,14 @@ def detect_layout(paths: list[str], metadata: dict[str, Any]) -> list[DetectedCo
     if parquet_paths:
         data_paths = parquet_paths
     if not data_paths and metadata_paths:
-        data_paths = metadata_paths
+        grouped_imagefolder: dict[str, list[str]] = {}
+        for path in [*metadata_paths, *image_paths]:
+            grouped_imagefolder.setdefault(detect_split_name(path), []).append(path)
+        splits = [
+            DetectedSplit(name, sorted(files))
+            for name, files in sorted(grouped_imagefolder.items())
+        ]
+        return [DetectedConfig("default", "imagefolder", {}, splits)]
     if not data_paths:
         if image_paths:
             files = metadata_paths + image_paths

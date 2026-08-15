@@ -300,6 +300,81 @@ def test_parquet_image_cells_are_served_as_cached_thumbnails(
     assert anonymous.status_code == 401
 
 
+def test_imagefolder_metadata_images_are_served_as_cached_thumbnails(
+    client: TestClient,
+) -> None:
+    _create_repository(client)
+    image_output = BytesIO()
+    Image.new("RGB", (640, 480), color=(30, 120, 70)).save(image_output, format="PNG")
+    image_bytes = image_output.getvalue()
+    metadata = json.dumps(
+        {
+            "file_name": "images/example.png",
+            "image_id": "train/example",
+            "width": 640,
+            "height": 480,
+            "objects": {
+                "id": [0],
+                "bbox": [[10.0, 20.0, 30.0, 40.0]],
+                "area": [1200.0],
+                "category": [0],
+                "category_name": ["example"],
+            },
+        }
+    ).encode()
+
+    create = client.post(
+        "/api/v1/datasets/research/sentiment/uploads",
+        json={"commit_message": "Upload metadata ImageFolder"},
+    )
+    assert create.status_code == 201, create.text
+    upload_id = create.json()["id"]
+    uploaded = client.post(
+        f"/api/v1/uploads/{upload_id}/files",
+        files=[
+            ("files", ("metadata.jsonl", metadata, "application/x-ndjson")),
+            ("files", ("example.png", image_bytes, "image/png")),
+            ("paths", (None, "train/metadata.jsonl")),
+            ("paths", (None, "train/images/example.png")),
+        ],
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    complete = client.post(
+        f"/api/v1/uploads/{upload_id}/complete",
+        json={"expected_file_count": 2},
+    )
+    assert complete.status_code == 200, complete.text
+    revision_id = complete.json()["revision_id"]
+
+    viewer = client.get(
+        "/api/v1/datasets/research/sentiment/viewer/default/train",
+        params={"revision": revision_id},
+    )
+    assert viewer.status_code == 200, viewer.text
+    assert viewer.json()["rows"][0]["file_name"] == {
+        "_type": "image",
+        "path": "train/images/example.png",
+    }
+
+    media_path = "/api/v1/datasets/research/sentiment/viewer-media/default/train/0/file_name"
+    thumbnail = client.get(media_path, params={"revision": revision_id})
+    assert thumbnail.status_code == 200, thumbnail.text
+    assert thumbnail.headers["content-type"] == "image/webp"
+    with Image.open(BytesIO(thumbnail.content)) as image:
+        assert image.width <= 320
+        assert image.height <= 320
+
+    cached = client.get(media_path, params={"revision": revision_id})
+    assert cached.content == thumbnail.content
+    full_image = client.get(
+        media_path,
+        params={"revision": revision_id, "thumbnail": False},
+    )
+    assert full_image.status_code == 200
+    assert full_image.headers["content-type"] == "image/png"
+    assert full_image.content == image_bytes
+
+
 def test_retrying_same_tree_is_idempotent(client: TestClient) -> None:
     _create_repository(client)
     first = _upload_fixture(client)["revision"]
